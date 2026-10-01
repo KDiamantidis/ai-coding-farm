@@ -1,0 +1,134 @@
+{
+  "tasks": [
+    {
+      "id": "fix-money",
+      "title": "Fix parse_price and format_price",
+      "description": "parse_price must return integer cents WITHOUT floating point errors (19.99 -> 1999). It must accept an optional euro sign, spaces around the text, thousands commas ('\u20ac1,234.50'), a leading minus, and plain numbers like '7' (-> 700). Half a cent rounds up. Text that is not a number raises ValueError. format_price(cents) returns the euro sign, thousands commas and exactly two decimals ('\u20ac1,234.50', '\u20ac0.05'). Negative amounts look like '-\u20ac2.50'. Use integer math or the decimal module, not float.",
+      "files_allowed": [
+        "money.py"
+      ],
+      "context_files": [],
+      "test_cmd": "python -m pytest -q tests/test_money.py",
+      "depends_on": []
+    },
+    {
+      "id": "fix-cart",
+      "title": "Fix Cart.add and Cart.remove",
+      "description": "Cart.add must ADD the quantity when the sku is already in the cart. If the same sku comes with a different price, raise ValueError. qty must be greater than 0, otherwise raise ValueError. Cart.remove must ignore a sku that is not in the cart. Keep total() working.",
+      "files_allowed": [
+        "cart.py"
+      ],
+      "context_files": [],
+      "test_cmd": "python -m pytest -q tests/test_cart.py",
+      "depends_on": []
+    },
+    {
+      "id": "add-discounts",
+      "title": "Add discounts.py with apply_discount",
+      "description": "Create discounts.py with apply_discount(total_cents, code) that returns the new total in integer cents. Codes are case-insensitive. 'SAVE10' takes 10% off, and the discount amount is rounded HALF UP to a whole cent (10% of 1005 is 100.5, so it becomes 101). Do not use float or round(). 'FIVE' takes 500 cents off, and the result never goes below 0. An unknown code raises ValueError.",
+      "files_allowed": [
+        "discounts.py"
+      ],
+      "context_files": [],
+      "test_cmd": "python -m pytest -q tests/test_discounts.py",
+      "depends_on": []
+    },
+    {
+      "id": "cart-total-code",
+      "title": "Cart.total accepts a discount code",
+      "description": "Change Cart.total to total(code=None). Without a code it returns the plain sum. With a code it returns discounts.apply_discount(subtotal, code). Reuse apply_discount, do not copy its rules. Keep the rest of Cart unchanged.",
+      "files_allowed": [
+        "cart.py"
+      ],
+      "context_files": [
+        "discounts.py"
+      ],
+      "test_cmd": "python -m pytest -q tests/test_cart_total.py tests/test_cart.py",
+      "depends_on": [
+        "fix-cart",
+        "add-discounts"
+      ]
+    },
+    {
+      "id": "fix-inventory-reserve",
+      "title": "Fix Inventory.reserve and add available",
+      "description": "Inventory.reserve(sku, qty) must return False and change nothing when the sku is unknown or the stock is too low (do not create entries for unknown skus). It returns True and lowers the stock otherwise. qty must be greater than 0, otherwise raise ValueError. Add available(sku) which returns the stock, or 0 for an unknown sku.",
+      "files_allowed": [
+        "inventory.py"
+      ],
+      "context_files": [],
+      "test_cmd": "python -m pytest -q tests/test_inventory.py",
+      "depends_on": []
+    },
+    {
+      "id": "add-checkout",
+      "title": "Add checkout.py with all-or-nothing checkout",
+      "description": "Create checkout.py with class OutOfStock(Exception) that has a .sku attribute, and checkout(cart, inventory, code=None). It returns {'total': cents, 'reserved': [(sku, qty), ...]}. The total is cart.total(code). It reserves every item in the cart. If one item cannot be reserved, give back everything already reserved (use inventory.add_stock) and raise OutOfStock(sku). An invalid discount code must raise ValueError BEFORE anything is reserved. An empty cart returns total 0 and an empty list.",
+      "files_allowed": [
+        "checkout.py"
+      ],
+      "context_files": [
+        "cart.py",
+        "inventory.py",
+        "discounts.py"
+      ],
+      "test_cmd": "python -m pytest -q tests/test_checkout.py",
+      "depends_on": [
+        "cart-total-code",
+        "fix-inventory-reserve"
+      ]
+    },
+    {
+      "id": "fix-sales-csv",
+      "title": "Fix sales_csv quoting and prices",
+      "description": "sales_csv must write the price from price_cents with exactly two decimals (1000 -> '10.00', 5 -> '0.05'), using integer math. Any cell that contains a comma, a double quote or a new line must be wrapped in double quotes, and double quotes inside it are doubled. The header stays 'sku,qty,price', every line ends with a new line.",
+      "files_allowed": [
+        "report.py"
+      ],
+      "context_files": [],
+      "test_cmd": "python -m pytest -q tests/test_csv.py",
+      "depends_on": []
+    },
+    {
+      "id": "add-top-sellers",
+      "title": "Add top_sellers to report.py",
+      "description": "Add top_sellers(rows, n) to report.py. rows are dicts like in sales_csv. Add up qty per sku, sort by total qty (highest first), break ties by sku (A to Z), and return the first n as a list of (sku, total_qty) tuples. n <= 0 gives an empty list. Do not change the input rows. Keep sales_csv unchanged.",
+      "files_allowed": [
+        "report.py"
+      ],
+      "context_files": [],
+      "test_cmd": "python -m pytest -q tests/test_top_sellers.py tests/test_csv.py",
+      "depends_on": [
+        "fix-sales-csv"
+      ]
+    },
+    {
+      "id": "fix-parse-line",
+      "title": "Make parse_line accept real-world input",
+      "description": "parse_line must accept: '2 x SKU-1 @ \u20ac3.50', '2x SKU-1 @ 3.50' (no spaces around x, no euro sign), a capital X, extra spaces at both ends, and prices with thousands commas. It returns (sku, qty, price_cents) and keeps using money.parse_price. qty 0 raises ValueError. Text that does not match the pattern raises ValueError. A bad price raises ValueError.",
+      "files_allowed": [
+        "orders.py"
+      ],
+      "context_files": [
+        "money.py"
+      ],
+      "test_cmd": "python -m pytest -q tests/test_orders.py",
+      "depends_on": [
+        "fix-money"
+      ]
+    },
+    {
+      "id": "add-low-stock",
+      "title": "Add Inventory.low_stock",
+      "description": "Add low_stock(threshold) to Inventory. It returns a sorted list of skus whose stock is less than or equal to the threshold (zero stock is included). Keep the other methods unchanged.",
+      "files_allowed": [
+        "inventory.py"
+      ],
+      "context_files": [],
+      "test_cmd": "python -m pytest -q tests/test_low_stock.py tests/test_inventory.py",
+      "depends_on": [
+        "fix-inventory-reserve"
+      ]
+    }
+  ]
+}

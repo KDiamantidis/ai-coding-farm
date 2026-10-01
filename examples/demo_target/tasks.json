@@ -1,0 +1,46 @@
+{
+  "tasks": [
+    {
+      "id": "fix-slugify",
+      "title": "Fix slugify for punctuation and extra spaces",
+      "description": "slugify('Hello, World!') must return 'hello-world'. Remove punctuation, turn every run of spaces or symbols into one '-', and strip '-' from both ends. Keep all other functions unchanged.",
+      "files_allowed": [
+        "textutils.py"
+      ],
+      "test_cmd": "python -m pytest -q tests/test_slugify.py",
+      "depends_on": []
+    },
+    {
+      "id": "fix-word-count",
+      "title": "Fix word_count for any whitespace",
+      "description": "word_count must split on ANY whitespace (spaces, tabs, new lines) and return 0 for an empty string. Keep other functions unchanged.",
+      "files_allowed": [
+        "textutils.py"
+      ],
+      "test_cmd": "python -m pytest -q tests/test_word_count.py",
+      "depends_on": []
+    },
+    {
+      "id": "fix-truncate",
+      "title": "Fix truncate so the result never exceeds the limit",
+      "description": "truncate(text, limit) must return at most `limit` characters. When the text is cut, the result ends with '...' and its total length is exactly `limit`. Short text is returned unchanged.",
+      "files_allowed": [
+        "textutils.py"
+      ],
+      "test_cmd": "python -m pytest -q tests/test_truncate.py",
+      "depends_on": []
+    },
+    {
+      "id": "add-palindrome",
+      "title": "Add is_palindrome",
+      "description": "Add is_palindrome(text). It must ignore case and punctuation. Reuse slugify() to normalise the text. Keep other functions unchanged.",
+      "files_allowed": [
+        "textutils.py"
+      ],
+      "test_cmd": "python -m pytest -q tests/test_palindrome.py",
+      "depends_on": [
+        "fix-slugify"
+      ]
+    }
+  ]
+}

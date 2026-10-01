@@ -1,0 +1,17 @@
+# =============================================================================
+# FILE:    models.mock.yaml
+# PURPOSE: Fake models for the offline demo and the tests. No API keys.
+#   mock/weak   is wrong on purpose for some tasks
+#   mock/strong is right
+# =============================================================================
+
+roles:
+  coder:
+    chain:
+      - mock/weak
+      - mock/strong
+
+settings:
+  max_attempts: 3
+  test_timeout_s: 60
+  call_timeout_s: 10

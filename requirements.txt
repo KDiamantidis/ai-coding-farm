@@ -1,0 +1,10 @@
+# Core (the offline demo needs only these)
+pyyaml>=6.0
+pytest>=8.0
+
+# Real models
+litellm>=1.50
+
+# Dashboard
+streamlit>=1.40
+pandas>=2.0

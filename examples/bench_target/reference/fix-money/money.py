@@ -1,0 +1,19 @@
+"""Money helpers. Prices are stored as integer cents."""
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+
+def parse_price(text):
+    """'€12.50' -> 1250"""
+    cleaned = text.strip().replace("€", "").replace(",", "").strip()
+    try:
+        value = Decimal(cleaned)
+    except InvalidOperation:
+        raise ValueError(f"bad price: {text!r}")
+    return int((value * 100).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def format_price(cents):
+    """1250 -> '€12.50'"""
+    sign = "-" if cents < 0 else ""
+    cents = abs(cents)
+    return f"{sign}€{cents // 100:,}.{cents % 100:02d}"

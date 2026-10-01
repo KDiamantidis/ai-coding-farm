@@ -1,0 +1,22 @@
+"""A shopping cart. Prices are integer cents."""
+
+
+class Cart:
+    def __init__(self):
+        self.items = {}  # sku -> [price_cents, qty]
+
+    def add(self, sku, price_cents, qty=1):
+        if qty <= 0:
+            raise ValueError("qty must be positive")
+        if sku in self.items:
+            if self.items[sku][0] != price_cents:
+                raise ValueError("price changed for " + sku)
+            self.items[sku][1] += qty
+        else:
+            self.items[sku] = [price_cents, qty]
+
+    def remove(self, sku):
+        self.items.pop(sku, None)
+
+    def total(self):
+        return sum(price * qty for price, qty in self.items.values())

@@ -1,0 +1,23 @@
+"""Stock levels per SKU."""
+
+
+class Inventory:
+    def __init__(self):
+        self.stock = {}  # sku -> quantity
+
+    def add_stock(self, sku, qty):
+        self.stock[sku] = self.stock.get(sku, 0) + qty
+
+    def available(self, sku):
+        return self.stock.get(sku, 0)
+
+    def reserve(self, sku, qty):
+        if qty <= 0:
+            raise ValueError("qty must be positive")
+        if self.available(sku) < qty:
+            return False
+        self.stock[sku] -= qty
+        return True
+
+    def low_stock(self, threshold):
+        return sorted(sku for sku, qty in self.stock.items() if qty <= threshold)

@@ -1,0 +1,33 @@
+### FILE: textutils.py
+```python
+"""Small text helpers used by the demo project."""
+
+import re
+
+
+def slugify(text):
+    """Turn a title into a URL slug: 'Hello, World!' -> 'hello-world'."""
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")
+
+
+def word_count(text):
+    """Count words separated by any amount of whitespace."""
+    return len(text.split())
+
+
+def truncate(text, limit):
+    """Cut text to at most `limit` characters, ending with '...' when cut."""
+    # ... rest of the code stays the same
+
+
+def shout(text):
+    """Upper-case text and add an exclamation mark."""
+    return text.upper() + "!"
+
+
+def reverse_words(text):
+    """Reverse the order of words: 'a b c' -> 'c b a'."""
+    return " ".join(reversed(text.split()))
+```

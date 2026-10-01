@@ -1,0 +1,41 @@
+# =============================================================================
+# FILE:    models.yaml
+# PURPOSE: The model registry. ONE line per model, per role.
+#
+# HOW THE CHAIN WORKS (cheapest first, strongest last):
+#   - attempt 1 uses the first model. If the gatekeeper rejects the patch,
+#     attempt 2 starts one model higher (escalation), and so on.
+#   - if a model call itself fails (outage, rate limit), the same model is retried
+#     up to 3 times (waiting as long as the provider asks), then the next model in
+#     the chain is tried (API fallback).
+#
+# MODEL NAMES use the LiteLLM format: <provider>/<model>.
+#   Free-tier model names change often. CHECK the provider's model list before
+#   you run, and edit the lines below. The code never contains a model name.
+#   Keys go in .env (never in this file).
+#
+# RULE: a new model is never added because of a public benchmark alone.
+#   Add it, run the same tasks, read `python -m farm report`, then decide.
+# =============================================================================
+
+roles:
+  coder:
+    chain:
+      - groq/qwen/qwen3.8-27b               # step 1: fastest, fewest tokens per pass in the solo runs
+      - groq/openai/gpt-oss-120b            # step 2: most reliable in the solo runs (10 of 10)
+      # - groq/openai/gpt-oss-20b           # also good, but returned empty answers now and then
+      # - ollama/qwen2.5-coder:7b           # local and free (needs Ollama on the same machine and a GPU)
+      # - gemini/gemini-3.8-flash           # free tier is only 20 requests per DAY, so not useful here
+
+# Extra settings for one model (passed to the provider as they are).
+# Tested: reasoning_effort "low" on gpt-oss-20b stopped the empty answers but gave more
+# wrong code (7 of 13 passed; the default gave 10 of 12 and 10 of 16 in two runs).
+# The intervals overlap, so there is no clear gain. It is off.
+# model_params:
+#   groq/openai/gpt-oss-20b:
+#     reasoning_effort: low
+
+settings:
+  max_attempts: 3        # attempts per task before it is marked failed
+  test_timeout_s: 60     # the gatekeeper kills a test run after this long
+  call_timeout_s: 120    # one model call

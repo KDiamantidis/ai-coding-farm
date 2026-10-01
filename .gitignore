@@ -1,0 +1,14 @@
+# secrets
+.env
+*.key
+
+# the farm's own data
+*.db
+.farm/
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+venv/
+.venv/

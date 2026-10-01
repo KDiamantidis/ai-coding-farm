@@ -1,0 +1,11 @@
+# One model alone (big Groq model), used to compare models on the same tasks:
+#   python -m farm bench --models models.only-gpt-oss-120b.yaml --tag 120b
+roles:
+  coder:
+    chain:
+      - groq/openai/gpt-oss-120b
+
+settings:
+  max_attempts: 3        # attempts per task before it is marked failed
+  test_timeout_s: 60     # the gatekeeper kills a test run after this long
+  call_timeout_s: 120    # one model call
