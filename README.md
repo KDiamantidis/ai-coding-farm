@@ -158,6 +158,22 @@ python -m farm --db .farm/bench_120b.db debug    # API errors and rejected answe
 Compare models only with the "one model alone" runs. In a chain run the second
 model only sees the tasks the first one failed, so its numbers are not comparable.
 
+### Run the tests inside Docker (optional)
+
+By default the gatekeeper runs the task's tests on your machine, in a temporary copy.
+Code written by a model can still use your network or CPU. With Docker the tests run in
+a throw-away container: no network, 512 MB memory, 1 CPU, read-only root file system,
+all Linux capabilities dropped. Only the temporary copy is mounted, never your repo.
+
+```bash
+python -m farm sandbox-build          # once; builds docker/Dockerfile (python + pytest)
+# then in models.yaml:  settings: sandbox: docker
+```
+
+If Docker is not running or the image is missing, the run stops at the start with a clear
+message. That is a setup error and is never counted against a model. A test that needs
+extra packages must have them installed in `docker/Dockerfile`, because there is no network.
+
 Windows tip: if a package fails to install on a very new Python, make a
 virtual environment with Python 3.12 (`uv venv --python 3.12`).
 
@@ -176,6 +192,8 @@ farm/db.py            SQLite: tasks, attempts, calls
 farm/router.py        model choice, fallback, call log
 farm/worker.py        prompt and answer parser
 farm/gatekeeper.py    all the checks (no AI)
+farm/sandbox.py       optional Docker container for the test step
+docker/Dockerfile     image for that container
 farm/orchestrator.py  the loop, escalation, git commits
 farm/stats.py         the only place statistics are computed
 farm/cli.py           python -m farm ...
@@ -183,7 +201,7 @@ dashboard.py          Streamlit view of the log
 examples/demo_target  the offline demo project, tasks and mock answers
 examples/bench_target the 10 harder tasks, with reference solutions (`reference/`)
 docs/                 dashboard screenshots
-tests/                34 tests (including a check that every benchmark task is fair)
+tests/                44 tests (including a check that every benchmark task is fair)
 ```
 
 ## Limits (what this version does not do)
@@ -199,7 +217,6 @@ tests/                34 tests (including a check that every benchmark task is f
 
 ## Roadmap
 
-- Docker sandbox for the test step (today it is a temporary folder).
 - A private evaluation set from your own repos, and a "shadow mode" before a new
   model is promoted.
 - A small learned router, only if it beats the YAML rules on the logged data.

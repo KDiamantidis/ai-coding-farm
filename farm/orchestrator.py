@@ -28,7 +28,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import db, gatekeeper, worker
+from . import db, gatekeeper, sandbox, worker
 from .mockmodel import ModelError
 from .router import Router
 
@@ -117,7 +117,8 @@ def run_task(conn, router: Router, cfg: dict, repo: Path, task: dict, branch: st
             continue
 
         files = worker.parse_files(reply.text)
-        verdict = gatekeeper.evaluate(repo, task, files, settings["test_timeout_s"])
+        verdict = gatekeeper.evaluate(repo, task, files, settings["test_timeout_s"],
+                                        docker=sandbox.from_settings(settings))
         db.log_attempt(conn, task_id=task["id"], attempt_no=attempt_no, role="coder",
                        model=reply.model, passed=verdict.passed, reason=verdict.reason,
                        tokens_in=reply.tokens_in, tokens_out=reply.tokens_out,
@@ -139,6 +140,9 @@ def run_all(conn, cfg: dict, repo: str | Path, branch: str = "farm/run") -> dict
     'blocked' by them are put back in the queue. Real failures stay failed.
     """
     repo = Path(repo)
+    docker_cfg = sandbox.from_settings(cfg["settings"])
+    if docker_cfg:
+        sandbox.preflight(docker_cfg)   # setup errors stop here, before any model call
     router = Router(cfg, conn)
     _switch_to_branch(repo, branch)  # tests must see the work of earlier runs
     for t in db.all_tasks(conn):

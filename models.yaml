@@ -39,3 +39,10 @@ settings:
   max_attempts: 3        # attempts per task before it is marked failed
   test_timeout_s: 60     # the gatekeeper kills a test run after this long
   call_timeout_s: 120    # one model call
+  # Where the tests run. 'none' = on this machine (default). 'docker' = in a throw-away
+  # container: no network, 512 MB, 1 CPU, read-only root. Build the image once with
+  #   python -m farm sandbox-build
+  sandbox: docker
+  # sandbox_image: farm-sandbox:latest
+  # sandbox_memory: 512m
+  # sandbox_cpus: "1"

@@ -14,6 +14,7 @@
 #   4. placeholder   "rest of the code" style laziness
 #   5. shrunk        a big file lost more than 40% of its lines
 #   6. tests_failed / timeout   the task's test command, run in a COPY of the repo
+#                               (optionally inside a Docker container, see sandbox.py)
 #
 # DESIGN NOTES:
 #   - The tests run in a temporary copy. The real repo is never touched until
@@ -36,6 +37,8 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import sandbox as docker_sandbox
 
 MIN_LINES_FOR_SHRINK_CHECK = 20   # tiny files may legitimately shrink a lot
 MAX_SHRINK_FRACTION = 0.60        # new file must keep at least 60% of the lines
@@ -113,14 +116,22 @@ def _trim(output: str) -> str:
     return "\n".join(lines)[-FEEDBACK_MAX_CHARS:]
 
 
-def run_tests(sandbox: Path, test_cmd: str, timeout_s: int) -> Verdict:
-    """Run the task's test command inside the sandbox copy."""
+def run_tests(sandbox: Path, test_cmd: str, timeout_s: int,
+              docker: dict | None = None) -> Verdict:
+    """Run the task's test command inside the sandbox copy.
+
+    With `docker` (see sandbox.py) the command runs in a container with no
+    network and limited memory; otherwise on the host, as before.
+    """
     argv = shlex.split(test_cmd)
-    if argv and argv[0] in ("python", "python3"):
+    if docker is None and argv and argv[0] in ("python", "python3"):
         argv[0] = sys.executable
     try:
-        proc = subprocess.run(argv, cwd=sandbox, capture_output=True, text=True,
-                              timeout=timeout_s)
+        if docker is not None:
+            proc = docker_sandbox.run(docker, sandbox, argv, timeout_s)
+        else:
+            proc = subprocess.run(argv, cwd=sandbox, capture_output=True, text=True,
+                                  timeout=timeout_s)
     except subprocess.TimeoutExpired:
         return _fail("timeout", f"The tests did not finish within {timeout_s} seconds.")
     except FileNotFoundError:
@@ -132,7 +143,7 @@ def run_tests(sandbox: Path, test_cmd: str, timeout_s: int) -> Verdict:
 
 
 def evaluate(repo: str | Path, task: dict, files: dict[str, str],
-             timeout_s: int = 60) -> Verdict:
+             timeout_s: int = 60, docker: dict | None = None) -> Verdict:
     """Full gatekeeper pipeline. Never modifies `repo`."""
     repo = Path(repo)
     early = check_patch(repo, task, files)
@@ -146,4 +157,4 @@ def evaluate(repo: str | Path, task: dict, files: dict[str, str],
             target = sandbox / _normalize(raw_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
-        return run_tests(sandbox, task["test_cmd"], timeout_s)
+        return run_tests(sandbox, task["test_cmd"], timeout_s, docker)

@@ -26,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import db, orchestrator, stats
+from . import db, orchestrator, sandbox, stats
 from .config import ConfigError, load_env, load_models
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,6 +66,11 @@ def cmd_run(args) -> int:
               "Run the same command again to continue.")
     ok = summary["failed"] == 0 and summary["blocked"] == 0 and not summary.get("unavailable")
     return 0 if ok else 1
+
+
+def cmd_sandbox_build(args) -> int:
+    cfg = sandbox.from_settings({"sandbox": "docker"})
+    return sandbox.build_image(cfg)
 
 
 def cmd_report(args) -> int:
@@ -189,6 +194,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--env", default=".env")
     r.add_argument("--branch", default="farm/run")
     r.set_defaults(func=cmd_run)
+
+    sb = sub.add_parser("sandbox-build", help="build the Docker image for settings.sandbox: docker")
+    sb.set_defaults(func=cmd_sandbox_build)
 
     s = sub.add_parser("report", help="print statistics")
     s.set_defaults(func=cmd_report)
