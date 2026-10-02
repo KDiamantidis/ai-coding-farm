@@ -177,7 +177,9 @@ limit 18 times instead of 3, and each rejected call had to wait and be retried. 
 only help when the limit is not the bottleneck (a paid tier, or several models and providers).
 
 The `rate_limits` section of `models.yaml` (tokens per minute per model) makes the farm wait
-for room in the budget instead of sending calls that will be rejected. Compare models with
+for room in the budget instead of sending calls that will be rejected. It works like the
+provider's own counter (a bucket that drains 8000/60 tokens per second), so it waits only as
+long as needed. Compare models with
 `--workers 1`, so the timing numbers stay comparable.
 
 ### Run the tests inside Docker (optional)

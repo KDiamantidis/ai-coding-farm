@@ -18,7 +18,7 @@
 #
 # TOKEN BUDGET (settings: `rate_limits` in models.yaml, tokens per minute per model):
 #   Free tiers allow a number of tokens per minute (Groq: 8000). All workers share that
-#   budget. TokenLimiter keeps a 60-second window of tokens used and makes a call WAIT
+#   budget. TokenLimiter is a token bucket (drains limit/60 per second) and makes a call WAIT
 #   until it fits, instead of sending it, getting a 429, and retrying. A model with no
 #   entry in `rate_limits` is not limited.
 #
@@ -75,42 +75,51 @@ def _is_transient(message: str) -> bool:
 
 
 class TokenLimiter:
-    """Sliding 60-second window of tokens. Thread safe. Used by every worker."""
+    """Token bucket, like the providers use. Thread safe, shared by every worker.
 
-    SAFETY = 0.9   # stay a little under the provider's limit
+    `level` is how many tokens were used recently. It drains at limit/60 tokens per
+    second. A call may start when level + its size fits under the limit; otherwise it
+    waits exactly as long as it takes to drain the difference. (This matches the
+    "try again in 7.09s" hints of Groq: (7188 + 1757 - 8000) / (8000 / 60) = 7.09.)
+    """
 
-    def __init__(self, tokens_per_minute: int, window_s: float = 60.0,
-                 clock=time.monotonic, sleep=time.sleep):
-        self.limit = tokens_per_minute * self.SAFETY
-        self.window = window_s
+    SAFETY = 0.95   # stay a little under the provider's limit
+
+    def __init__(self, tokens_per_minute: int, clock=time.monotonic, sleep=time.sleep):
+        self.capacity = tokens_per_minute * self.SAFETY
+        self.rate = tokens_per_minute / 60.0        # tokens drained per second
         self.clock, self.sleep = clock, sleep
-        self.entries: list[list[float]] = []   # [time, tokens]
+        self.level = 0.0
+        self.last = clock()
         self.lock = threading.Lock()
-        self.avg_out = 1000.0                   # learned from real answers
+        self.avg_out = 1000.0                       # learned from real answers
+
+    def _drain(self) -> None:
+        now = self.clock()
+        self.level = max(0.0, self.level - (now - self.last) * self.rate)
+        self.last = now
 
     def estimate(self, messages: list[dict]) -> int:
         chars = sum(len(m.get("content", "")) for m in messages)
         return int(chars / 3.5 + self.avg_out)
 
-    def acquire(self, estimate: int) -> list[float]:
-        """Wait until `estimate` tokens fit in the window, then reserve them."""
+    def acquire(self, estimate: int) -> float:
+        """Wait until `estimate` tokens fit, then reserve them. Returns the reservation."""
         while True:
             with self.lock:
-                now = self.clock()
-                self.entries = [e for e in self.entries if now - e[0] < self.window]
-                used = sum(e[1] for e in self.entries)
-                # an empty window always lets one call through, even a very big one
-                if not self.entries or used + estimate <= self.limit:
-                    entry = [now, float(estimate)]
-                    self.entries.append(entry)
-                    return entry
-                wait = self.entries[0][0] + self.window - now
-            self.sleep(min(max(wait, 0.05), 5.0))
+                self._drain()
+                # an empty bucket always lets one call through, even a very big one
+                if self.level <= 0.0 or self.level + estimate <= self.capacity:
+                    self.level += estimate
+                    return float(estimate)
+                wait = (self.level + estimate - self.capacity) / self.rate
+            self.sleep(min(max(wait, 0.05), 10.0))
 
-    def settle(self, entry: list[float], tokens_in: int, tokens_out: int) -> None:
+    def settle(self, reserved: float, tokens_in: int, tokens_out: int) -> None:
         """Replace the reservation with what the provider really counted."""
         with self.lock:
-            entry[1] = float(tokens_in + tokens_out)
+            self._drain()
+            self.level = max(0.0, self.level + (tokens_in + tokens_out) - reserved)
             self.avg_out = 0.7 * self.avg_out + 0.3 * tokens_out
 
 

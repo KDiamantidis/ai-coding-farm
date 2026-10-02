@@ -149,40 +149,59 @@ class FakeTime:
         self.now += s
 
 
-def test_limiter_lets_calls_through_until_the_budget_is_used():
+def make_limiter(t, tpm=1000):
+    return router.TokenLimiter(tpm, clock=t.clock, sleep=t.sleep)   # capacity 950, drains 16.7/s
+
+
+def test_limiter_lets_calls_through_until_the_bucket_is_full():
     t = FakeTime()
-    lim = router.TokenLimiter(1000, clock=t.clock, sleep=t.sleep)    # budget 900
+    lim = make_limiter(t)
     lim.acquire(400)
     lim.acquire(400)
     assert t.slept == 0
-    lim.acquire(400)                    # does not fit: must wait for the first to leave the window
-    assert t.slept >= 59.9
+
+
+def test_limiter_waits_exactly_as_long_as_it_takes_to_drain():
+    t = FakeTime()
+    lim = make_limiter(t)
+    lim.acquire(400)
+    lim.acquire(400)
+    lim.acquire(400)        # level 800 + 400 = 1200, capacity 950: 250 too much
+    assert abs(t.slept - 250 / (1000 / 60)) < 0.2   # 15 s, the same formula as the Groq hint
+
+
+def test_limiter_matches_a_real_groq_hint():
+    t = FakeTime()
+    lim = router.TokenLimiter(8000, clock=t.clock, sleep=t.sleep)
+    lim.level = 7188
+    lim.acquire(1757)
+    assert 7.0 < t.slept < 11      # Groq said 7.09 s; our 5% safety margin adds about 3 s
 
 
 def test_limiter_uses_real_usage_after_the_call():
     t = FakeTime()
-    lim = router.TokenLimiter(1000, clock=t.clock, sleep=t.sleep)
-    e = lim.acquire(800)
-    lim.settle(e, 100, 100)             # the call was much smaller than the estimate
-    lim.acquire(600)                    # fits now (200 + 600 <= 900)
+    lim = make_limiter(t)
+    r = lim.acquire(800)
+    lim.settle(r, 100, 100)         # the call was much smaller than the estimate
+    lim.acquire(600)                # 200 + 600 fits
     assert t.slept == 0
 
 
 def test_limiter_never_deadlocks_on_a_huge_request():
     t = FakeTime()
-    lim = router.TokenLimiter(1000, clock=t.clock, sleep=t.sleep)
-    lim.acquire(50_000)                 # bigger than the whole budget, window is empty: allowed
+    lim = make_limiter(t)
+    lim.acquire(50_000)             # bigger than the whole budget, bucket empty: allowed
     assert t.slept == 0
 
 
 def test_limiter_is_safe_with_many_threads():
     import threading
-    lim = router.TokenLimiter(10_000, window_s=0.2)   # real clock, short window
+    lim = router.TokenLimiter(1_200_000)            # real clock, large budget
     done = []
 
     def work():
-        e = lim.acquire(500)
-        lim.settle(e, 300, 200)
+        r = lim.acquire(500)
+        lim.settle(r, 300, 200)
         done.append(1)
     threads = [threading.Thread(target=work) for _ in range(40)]
     [x.start() for x in threads]
