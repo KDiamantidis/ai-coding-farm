@@ -16,6 +16,12 @@
 #      by the gatekeeper. The next ATTEMPT starts one level higher in the chain.
 #   `level` is the starting position in the chain. This file only handles (1).
 #
+# TOKEN BUDGET (settings: `rate_limits` in models.yaml, tokens per minute per model):
+#   Free tiers allow a number of tokens per minute (Groq: 8000). All workers share that
+#   budget. TokenLimiter keeps a 60-second window of tokens used and makes a call WAIT
+#   until it fits, instead of sending it, getting a 429, and retrying. A model with no
+#   entry in `rate_limits` is not limited.
+#
 # DESIGN NOTES:
 #   - Routing is rules from models.yaml. No classifier model: with a few roles,
 #     a YAML lookup is simpler, faster, and cannot be "wrong" in a surprising
@@ -68,6 +74,46 @@ def _is_transient(message: str) -> bool:
     return any(hint in low for hint in TRANSIENT_HINTS)
 
 
+class TokenLimiter:
+    """Sliding 60-second window of tokens. Thread safe. Used by every worker."""
+
+    SAFETY = 0.9   # stay a little under the provider's limit
+
+    def __init__(self, tokens_per_minute: int, window_s: float = 60.0,
+                 clock=time.monotonic, sleep=time.sleep):
+        self.limit = tokens_per_minute * self.SAFETY
+        self.window = window_s
+        self.clock, self.sleep = clock, sleep
+        self.entries: list[list[float]] = []   # [time, tokens]
+        self.lock = threading.Lock()
+        self.avg_out = 1000.0                   # learned from real answers
+
+    def estimate(self, messages: list[dict]) -> int:
+        chars = sum(len(m.get("content", "")) for m in messages)
+        return int(chars / 3.5 + self.avg_out)
+
+    def acquire(self, estimate: int) -> list[float]:
+        """Wait until `estimate` tokens fit in the window, then reserve them."""
+        while True:
+            with self.lock:
+                now = self.clock()
+                self.entries = [e for e in self.entries if now - e[0] < self.window]
+                used = sum(e[1] for e in self.entries)
+                # an empty window always lets one call through, even a very big one
+                if not self.entries or used + estimate <= self.limit:
+                    entry = [now, float(estimate)]
+                    self.entries.append(entry)
+                    return entry
+                wait = self.entries[0][0] + self.window - now
+            self.sleep(min(max(wait, 0.05), 5.0))
+
+    def settle(self, entry: list[float], tokens_in: int, tokens_out: int) -> None:
+        """Replace the reservation with what the provider really counted."""
+        with self.lock:
+            entry[1] = float(tokens_in + tokens_out)
+            self.avg_out = 0.7 * self.avg_out + 0.3 * tokens_out
+
+
 class Router:
     def __init__(self, cfg: dict, conn):
         self.cfg = cfg
@@ -75,6 +121,8 @@ class Router:
         self.settings = cfg["settings"]
         # Mock answers live next to models.yaml unless the file says otherwise.
         self.mock_dir = cfg.get("mock_dir", "examples/demo_target/mock")
+        self.limiters = {m: TokenLimiter(int(tpm))
+                         for m, tpm in (cfg.get("rate_limits") or {}).items()}
         self._local = threading.local()  # finish reason of the last call, per thread
 
     def call(self, role: str, messages: list[dict], level: int = 0,
@@ -126,7 +174,9 @@ class Router:
         # Extra settings for one model, from the "model_params" section of models.yaml
         # (for example reasoning_effort for the gpt-oss models).
         extra = (self.cfg.get("model_params") or {}).get(model, {})
-        resp = litellm.completion(
+        limiter = self.limiters.get(model)
+        entry = limiter.acquire(limiter.estimate(messages)) if limiter else None
+        resp = litellm.completion(          # on an error the reservation stays (counted as used)
             model=model,
             messages=messages,
             timeout=self.settings["call_timeout_s"],
@@ -138,4 +188,6 @@ class Router:
         usage = getattr(resp, "usage", None)
         tin = getattr(usage, "prompt_tokens", 0) or 0
         tout = getattr(usage, "completion_tokens", 0) or 0
+        if limiter:
+            limiter.settle(entry, tin, tout)
         return text, tin, tout

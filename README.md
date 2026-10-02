@@ -168,9 +168,17 @@ python -m farm --db farm.db run --repo /path/to/repo --workers 3
 Or set `workers: 3` under `settings:` in `models.yaml`. The default is 1. Waiting for the
 model and running the tests overlap; writing files and `git commit` take turns, so the
 branch stays clean. A task waits if it depends on an unfinished task, or if it could edit a
-file that a running task edits or reads. Free API tiers limit tokens per minute, so more
-workers mean more waiting on rate limits (the farm waits as long as the provider asks).
-Compare models with `--workers 1`, so the timing numbers stay comparable.
+file that a running task edits or reads.
+
+**Measured, and it did not help on a free tier.** Same 10 tasks, `gpt-oss-120b` on Groq:
+1 worker took 52 s and 3 workers took 118 s. The cause is the provider limit: Groq allows
+8000 tokens per minute per model, and all workers share it. With 3 workers the farm hit the
+limit 18 times instead of 3, and each rejected call had to wait and be retried. More workers
+only help when the limit is not the bottleneck (a paid tier, or several models and providers).
+
+The `rate_limits` section of `models.yaml` (tokens per minute per model) makes the farm wait
+for room in the budget instead of sending calls that will be rejected. Compare models with
+`--workers 1`, so the timing numbers stay comparable.
 
 ### Run the tests inside Docker (optional)
 
@@ -215,7 +223,7 @@ dashboard.py          Streamlit view of the log
 examples/demo_target  the offline demo project, tasks and mock answers
 examples/bench_target the 10 harder tasks, with reference solutions (`reference/`)
 docs/                 dashboard screenshots
-tests/                46 tests (including a check that every benchmark task is fair)
+tests/                50 tests (including a check that every benchmark task is fair)
 ```
 
 ## Limits (what this version does not do)
@@ -223,9 +231,9 @@ tests/                46 tests (including a check that every benchmark task is f
 - The offline demo is tested. The real-model path is only tested with a stand-in
   for LiteLLM, because it needs network and keys. Expect to fix small things on the
   first real run.
-- Parallel workers only help when tasks are independent. Tasks that depend on each other, or
-  that edit the same file, still run one after the other. Free-tier token limits per minute
-  also cap the speed.
+- Parallel workers do not make a free-tier run faster: the tokens-per-minute limit of the
+  provider is the bottleneck, not the farm. Tasks that depend on each other, or that edit
+  the same file, also run one after the other.
 - The tests in `tasks.json` are only as good as you write them. The gatekeeper cannot
   catch a bug that your tests do not cover.
 - With few tasks, the confidence intervals are wide. That is correct. Do not
