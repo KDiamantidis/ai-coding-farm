@@ -63,3 +63,40 @@ def test_whole_farm_solves_the_benchmark_offline(tmp_path):
     log = subprocess.run(["git", "-C", str(repo), "log", "--oneline", "farm/test"],
                          capture_output=True, text=True).stdout
     assert log.count("farm:") == 10
+
+
+def test_parallel_workers_give_the_same_result_as_one_worker(tmp_path):
+    """4 threads, same 10 tasks: same files, 10 commits, dependencies respected."""
+    from farm import cli, db, orchestrator
+
+    tasks = json.loads((BENCH / "tasks.json").read_text(encoding="utf-8"))["tasks"]
+    contents = {}
+    for n in (1, 4):
+        repo = tmp_path / f"repo{n}"
+        cli._prepare_repo(BENCH, repo)
+        cfg = {"roles": {"coder": {"chain": ["mock/strong"]}},
+               "settings": {"max_attempts": 1, "test_timeout_s": 60, "call_timeout_s": 5},
+               "mock_dir": str(BENCH / "mock")}
+        conn = db.connect(str(tmp_path / f"bench{n}.db"))
+        for t in tasks:
+            db.add_task(conn, t)
+        summary = orchestrator.run_all(conn, cfg, repo, "farm/test", workers=n)
+        assert summary["done"] == 10 and summary["failed"] == 0 and summary["blocked"] == 0
+        log = subprocess.run(["git", "-C", str(repo), "log", "--format=%s", "farm/test"],
+                             capture_output=True, text=True).stdout.splitlines()
+        assert sum(1 for line in log if line.startswith("farm:")) == 10
+        order = [line.split()[1] for line in reversed(log) if line.startswith("farm:")]
+        for t in tasks:   # a task is committed after everything it depends on
+            assert all(order.index(d) < order.index(t["id"]) for d in t["depends_on"])
+        contents[n] = {p.name: p.read_text() for p in repo.glob("*.py")}
+    assert contents[1] == contents[4]
+
+
+def test_tasks_that_share_a_file_never_run_together():
+    from farm.orchestrator import _conflict
+    a = {"files_allowed": ["cart.py"], "context_files": []}
+    b = {"files_allowed": ["./cart.py"], "context_files": []}
+    c = {"files_allowed": ["money.py"], "context_files": ["cart.py"]}
+    d = {"files_allowed": ["money.py"], "context_files": []}
+    assert _conflict(a, b) and _conflict(a, c) and _conflict(c, a)
+    assert not _conflict(a, d)

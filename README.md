@@ -158,6 +158,20 @@ python -m farm --db .farm/bench_120b.db debug    # API errors and rejected answe
 Compare models only with the "one model alone" runs. In a chain run the second
 model only sees the tasks the first one failed, so its numbers are not comparable.
 
+### Run several tasks at the same time (optional)
+
+```bash
+python -m farm bench --tag fast --workers 3
+python -m farm --db farm.db run --repo /path/to/repo --workers 3
+```
+
+Or set `workers: 3` under `settings:` in `models.yaml`. The default is 1. Waiting for the
+model and running the tests overlap; writing files and `git commit` take turns, so the
+branch stays clean. A task waits if it depends on an unfinished task, or if it could edit a
+file that a running task edits or reads. Free API tiers limit tokens per minute, so more
+workers mean more waiting on rate limits (the farm waits as long as the provider asks).
+Compare models with `--workers 1`, so the timing numbers stay comparable.
+
 ### Run the tests inside Docker (optional)
 
 By default the gatekeeper runs the task's tests on your machine, in a temporary copy.
@@ -194,14 +208,14 @@ farm/worker.py        prompt and answer parser
 farm/gatekeeper.py    all the checks (no AI)
 farm/sandbox.py       optional Docker container for the test step
 docker/Dockerfile     image for that container
-farm/orchestrator.py  the loop, escalation, git commits
+farm/orchestrator.py  the loop, escalation, parallel workers, git commits
 farm/stats.py         the only place statistics are computed
 farm/cli.py           python -m farm ...
 dashboard.py          Streamlit view of the log
 examples/demo_target  the offline demo project, tasks and mock answers
 examples/bench_target the 10 harder tasks, with reference solutions (`reference/`)
 docs/                 dashboard screenshots
-tests/                44 tests (including a check that every benchmark task is fair)
+tests/                46 tests (including a check that every benchmark task is fair)
 ```
 
 ## Limits (what this version does not do)
@@ -209,7 +223,9 @@ tests/                44 tests (including a check that every benchmark task is f
 - The offline demo is tested. The real-model path is only tested with a stand-in
   for LiteLLM, because it needs network and keys. Expect to fix small things on the
   first real run.
-- Tasks run one after another. There is no parallel worker yet.
+- Parallel workers only help when tasks are independent. Tasks that depend on each other, or
+  that edit the same file, still run one after the other. Free-tier token limits per minute
+  also cap the speed.
 - The tests in `tasks.json` are only as good as you write them. The gatekeeper cannot
   catch a bug that your tests do not cover.
 - With few tasks, the confidence intervals are wide. That is correct. Do not

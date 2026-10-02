@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -143,7 +144,8 @@ def run_tests(sandbox: Path, test_cmd: str, timeout_s: int,
 
 
 def evaluate(repo: str | Path, task: dict, files: dict[str, str],
-             timeout_s: int = 60, docker: dict | None = None) -> Verdict:
+             timeout_s: int = 60, docker: dict | None = None,
+             repo_lock: threading.RLock | None = None) -> Verdict:
     """Full gatekeeper pipeline. Never modifies `repo`."""
     repo = Path(repo)
     early = check_patch(repo, task, files)
@@ -152,7 +154,8 @@ def evaluate(repo: str | Path, task: dict, files: dict[str, str],
 
     with tempfile.TemporaryDirectory(prefix="farm-sandbox-") as tmp:
         sandbox = Path(tmp) / "repo"
-        shutil.copytree(repo, sandbox, ignore=IGNORE_ON_COPY)
+        with repo_lock or threading.RLock():   # no commit may happen while we copy
+            shutil.copytree(repo, sandbox, ignore=IGNORE_ON_COPY)
         for raw_path, content in files.items():
             target = sandbox / _normalize(raw_path)
             target.parent.mkdir(parents=True, exist_ok=True)

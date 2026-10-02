@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -74,7 +75,7 @@ class Router:
         self.settings = cfg["settings"]
         # Mock answers live next to models.yaml unless the file says otherwise.
         self.mock_dir = cfg.get("mock_dir", "examples/demo_target/mock")
-        self._finish = ""  # finish reason of the last successful call
+        self._local = threading.local()  # finish reason of the last call, per thread
 
     def call(self, role: str, messages: list[dict], level: int = 0,
              task_id: str | None = None, attempt_no: int | None = None) -> Reply:
@@ -107,13 +108,13 @@ class Router:
                 db.log_call(self.conn, task_id=task_id, attempt_no=attempt_no,
                             role=role, model=model, ok=True, tokens_in=tin,
                             tokens_out=tout, latency_s=elapsed)
-                return Reply(text, model, tin, tout, elapsed, self._finish)
+                return Reply(text, model, tin, tout, elapsed, getattr(self._local, "finish", ""))
 
         raise ModelError(f"all models failed for role '{role}': {last_error}")
 
     # ------------------------------------------------------------------
     def _complete(self, model: str, messages: list[dict]) -> tuple[str, int, int]:
-        self._finish = ""
+        self._local.finish = ""
         if model.startswith("mock/"):
             return mockmodel.complete(model, messages, self.mock_dir)
 
@@ -133,7 +134,7 @@ class Router:
             **extra,
         )
         text = resp.choices[0].message.content or ""
-        self._finish = str(getattr(resp.choices[0], "finish_reason", "") or "")
+        self._local.finish = str(getattr(resp.choices[0], "finish_reason", "") or "")
         usage = getattr(resp, "usage", None)
         tin = getattr(usage, "prompt_tokens", 0) or 0
         tout = getattr(usage, "completion_tokens", 0) or 0
