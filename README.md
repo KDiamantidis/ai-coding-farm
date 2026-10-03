@@ -170,17 +170,25 @@ model and running the tests overlap; writing files and `git commit` take turns, 
 branch stays clean. A task waits if it depends on an unfinished task, or if it could edit a
 file that a running task edits or reads.
 
-**Measured, and it did not help on a free tier.** Same 10 tasks, `gpt-oss-120b` on Groq:
-1 worker took 52 s and 3 workers took 118 s. The cause is the provider limit: Groq allows
-8000 tokens per minute per model, and all workers share it. With 3 workers the farm hit the
-limit 18 times instead of 3, and each rejected call had to wait and be retried. More workers
-only help when the limit is not the bottleneck (a paid tier, or several models and providers).
+**Measured: more workers did not make it faster on a free tier.** Same 10 tasks, `gpt-oss-120b`
+on Groq, total time:
 
-The `rate_limits` section of `models.yaml` (tokens per minute per model) makes the farm wait
-for room in the budget instead of sending calls that will be rejected. It works like the
-provider's own counter (a bucket that drains 8000/60 tokens per second), so it waits only as
-long as needed. Compare models with
-`--workers 1`, so the timing numbers stay comparable.
+| Setup | 1 worker | 3 workers |
+|---|---|---|
+| no token budget | 52 s | 118 s (18+ rate-limit errors) |
+| `rate_limits`, first version (60 s window) | 132 s | 82 s (0 errors) |
+| `rate_limits`, token bucket (current) | 56 s | 108 s |
+
+One run each, so small differences are noise. What is clear: Groq allows 8000 tokens per
+minute per model and all workers share it, so extra workers cannot add speed here. Why 3
+workers were still about twice as slow in the last row is not explained yet. I did not
+investigate further, because the default (1 worker) is fastest. Parallel workers should
+help only where the limit is not the bottleneck (a paid tier, or several models and providers).
+
+`rate_limits` in `models.yaml` (tokens per minute per model) makes the farm wait for room in
+the budget instead of sending calls that will be rejected. It works like the provider's own
+counter (a bucket that drains 8000/60 tokens per second), so it waits only as long as needed.
+Compare models with `--workers 1`, so the timing numbers stay comparable.
 
 ### Run the tests inside Docker (optional)
 
