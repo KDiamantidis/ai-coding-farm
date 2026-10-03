@@ -4,7 +4,7 @@
 #          judge, retry with a stronger model, commit what passes.
 #
 # EXPORTS:
-#   run_all(conn, cfg, repo, branch)  -> dict summary
+#   run_all(conn, cfg, repo, branch, workers)  -> dict summary
 #
 # THE LOOP (per task):
 #   attempt 1 -> chain[0]. Rejected? attempt 2 -> chain[1] (escalation).
@@ -14,6 +14,15 @@
 # TASK ORDER (a small DAG):
 #   A task is READY when every id in depends_on is 'done'. If a dependency
 #   failed, the task becomes 'blocked' and is never attempted.
+#
+# PARALLEL WORKERS (settings.workers or --workers, default 1):
+#   Up to N tasks run at the same time in threads. The slow parts (waiting for the
+#   model, running the tests) overlap; the short parts (copying the repo, writing
+#   files, git commit) take turns behind one lock. Two tasks never run together if
+#   one may edit a file the other edits or reads, so they cannot overwrite each
+#   other. The scheduler is the main thread: only it changes task status.
+#   Providers limit tokens per minute; more workers means more waiting on those
+#   limits (the router already waits as long as the provider asks).
 #
 # GIT:
 #   Passing patches are committed to ONE branch, one commit per task. The farm
@@ -25,7 +34,9 @@
 from __future__ import annotations
 
 import subprocess
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from . import db, gatekeeper, sandbox, worker
@@ -90,7 +101,8 @@ def ready_tasks(conn) -> list[dict]:
     return ready
 
 
-def run_task(conn, router: Router, cfg: dict, repo: Path, task: dict, branch: str) -> str:
+def run_task(conn, router: Router, cfg: dict, repo: Path, task: dict, branch: str,
+             repo_lock: threading.RLock | None = None) -> str:
     """Try one task. Returns 'done', 'failed' or 'unavailable'.
 
     Only answers that reached the gatekeeper count as attempts. If every model
@@ -99,6 +111,7 @@ def run_task(conn, router: Router, cfg: dict, repo: Path, task: dict, branch: st
     'unavailable', which is not a verdict on the model or the task.
     """
     settings = cfg["settings"]
+    repo_lock = repo_lock or threading.RLock()
     feedback: str | None = None
     attempt_no = 1
     outages = 0
@@ -118,14 +131,16 @@ def run_task(conn, router: Router, cfg: dict, repo: Path, task: dict, branch: st
 
         files = worker.parse_files(reply.text)
         verdict = gatekeeper.evaluate(repo, task, files, settings["test_timeout_s"],
-                                        docker=sandbox.from_settings(settings))
+                                        docker=sandbox.from_settings(settings),
+                                        repo_lock=repo_lock)
         db.log_attempt(conn, task_id=task["id"], attempt_no=attempt_no, role="coder",
                        model=reply.model, passed=verdict.passed, reason=verdict.reason,
                        tokens_in=reply.tokens_in, tokens_out=reply.tokens_out,
                        latency_s=reply.latency_s,
                        detail=None if verdict.passed else f"[finish={reply.finish_reason or '?'}] " + reply.text[:500])
         if verdict.passed:
-            _apply_and_commit(repo, task, files, branch)
+            with repo_lock:
+                _apply_and_commit(repo, task, files, branch)
             return "done"
         feedback = verdict.feedback
         attempt_no += 1
@@ -133,33 +148,67 @@ def run_task(conn, router: Router, cfg: dict, repo: Path, task: dict, branch: st
     return "failed"
 
 
-def run_all(conn, cfg: dict, repo: str | Path, branch: str = "farm/run") -> dict:
+def _paths(names: list[str]) -> set[str]:
+    return {gatekeeper._normalize(n) or n for n in names}
+
+
+def _conflict(a: dict, b: dict) -> bool:
+    """True if one task may edit a file that the other edits or reads."""
+    return bool(_paths(a["files_allowed"]) & (_paths(b["files_allowed"]) | _paths(b["context_files"]))
+                or _paths(b["files_allowed"]) & _paths(a["context_files"]))
+
+
+def run_all(conn, cfg: dict, repo: str | Path, branch: str = "farm/run",
+            workers: int | None = None) -> dict:
     """Process the whole queue. Returns counts per status.
 
     Running again CONTINUES: tasks that were 'unavailable' (API down) or
     'blocked' by them are put back in the queue. Real failures stay failed.
+    With workers > 1, independent tasks run at the same time (see header).
     """
     repo = Path(repo)
+    workers = max(1, int(workers or cfg["settings"].get("workers", 1)))
     docker_cfg = sandbox.from_settings(cfg["settings"])
     if docker_cfg:
         sandbox.preflight(docker_cfg)   # setup errors stop here, before any model call
     router = Router(cfg, conn)
+    repo_lock = threading.RLock()
     _switch_to_branch(repo, branch)  # tests must see the work of earlier runs
     for t in db.all_tasks(conn):
         if t["status"] in ("unavailable", "blocked"):
             db.set_status(conn, t["id"], "pending")
 
+    running: dict = {}          # future -> task
     in_a_row = 0
-    while True:
-        ready = ready_tasks(conn)
-        if not ready:
-            break
-        task = ready[0]
-        result = run_task(conn, router, cfg, repo, task, branch)
-        db.set_status(conn, task["id"], result)
-        in_a_row = in_a_row + 1 if result == "unavailable" else 0
-        if in_a_row >= 2:  # the APIs are down: stop, do not burn time. Run again later.
-            break
+    stop = False                # APIs are down, or a setup error happened: start nothing new
+    error: BaseException | None = None
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        while True:
+            if not stop:
+                for task in ready_tasks(conn):
+                    if len(running) >= workers:
+                        break
+                    if any(task["id"] == r["id"] or _conflict(task, r) for r in running.values()):
+                        continue
+                    fut = pool.submit(run_task, conn, router, cfg, repo, task, branch, repo_lock)
+                    running[fut] = task
+            if not running:
+                break
+            finished, _ = wait(running, return_when=FIRST_COMPLETED)
+            for fut in finished:
+                task = running.pop(fut)
+                try:
+                    result = fut.result()
+                except BaseException as exc:   # setup error (Docker, litellm, git): stop, keep the first
+                    error = error or exc
+                    stop = True
+                    continue
+                db.set_status(conn, task["id"], result)
+                in_a_row = in_a_row + 1 if result == "unavailable" else 0
+                if in_a_row >= 2:  # the APIs are down: stop, do not burn time. Run again later.
+                    stop = True
+    if error is not None:
+        raise error
 
     summary = {"done": 0, "failed": 0, "blocked": 0, "unavailable": 0, "pending": 0}
     for t in db.all_tasks(conn):

@@ -12,15 +12,30 @@
 #     is shorter than the setup code an ORM would need.
 #   - The log IS the dataset. report/dashboard only read these tables. Nothing
 #     else keeps statistics, so numbers cannot drift apart.
+#   - Several worker threads share ONE connection (parallel workers). Every function
+#     below takes the same lock, so two threads never use the connection at once.
 #   - JSON lists (files_allowed, depends_on) are stored as TEXT and decoded in
 #     get_task(). SQLite has no array type and we never query inside them.
 # =============================================================================
 
 from __future__ import annotations
 
+import functools
 import json
 import sqlite3
+import threading
 from pathlib import Path
+
+_LOCK = threading.RLock()
+
+
+def _locked(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return func(*args, **kwargs)
+    return wrapper
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tasks (
@@ -70,7 +85,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     """Open (and create if needed) the database. Rows behave like dicts."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p))
+    conn = sqlite3.connect(str(p), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     # Older database files have no 'detail' column yet.
@@ -81,6 +96,7 @@ def connect(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+@_locked
 def add_task(conn: sqlite3.Connection, task: dict) -> None:
     """Insert one task. Re-adding the same id is a no-op (idempotent)."""
     for key in ("id", "title", "description", "files_allowed", "test_cmd"):
@@ -103,6 +119,7 @@ def add_task(conn: sqlite3.Connection, task: dict) -> None:
     conn.commit()
 
 
+@_locked
 def get_task(conn: sqlite3.Connection, task_id: str) -> dict:
     """Return one task as a plain dict with the JSON columns decoded."""
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -114,17 +131,20 @@ def get_task(conn: sqlite3.Connection, task_id: str) -> dict:
     return task
 
 
+@_locked
 def all_tasks(conn: sqlite3.Connection) -> list[dict]:
     """All tasks in creation order."""
     ids = [r["id"] for r in conn.execute("SELECT id FROM tasks ORDER BY rowid")]
     return [get_task(conn, i) for i in ids]
 
 
+@_locked
 def set_status(conn: sqlite3.Connection, task_id: str, status: str) -> None:
     conn.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
     conn.commit()
 
 
+@_locked
 def log_attempt(conn, *, task_id, attempt_no, role, model, passed, reason,
                 tokens_in=0, tokens_out=0, latency_s=0.0, detail=None) -> None:
     conn.execute(
@@ -136,6 +156,7 @@ def log_attempt(conn, *, task_id, attempt_no, role, model, passed, reason,
     conn.commit()
 
 
+@_locked
 def log_call(conn, *, task_id, attempt_no, role, model, ok, error=None,
              tokens_in=0, tokens_out=0, latency_s=0.0) -> None:
     conn.execute(

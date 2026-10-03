@@ -58,7 +58,7 @@ def cmd_run(args) -> int:
     load_env(args.env)
     cfg = load_models(args.models)
     conn = db.connect(args.db)
-    summary = orchestrator.run_all(conn, cfg, args.repo, args.branch)
+    summary = orchestrator.run_all(conn, cfg, args.repo, args.branch, args.workers)
     print("summary:", summary)
     print(f"review the work with:  git -C {args.repo} log {args.branch}")
     if summary.get("unavailable"):
@@ -171,7 +171,7 @@ def cmd_bench(args) -> int:
     for t in _load_tasks(BENCH_SOURCE / "tasks.json"):
         db.add_task(conn, t)
 
-    summary = orchestrator.run_all(conn, cfg, work, f"farm/bench-{args.tag}")
+    summary = orchestrator.run_all(conn, cfg, work, f"farm/bench-{args.tag}", args.workers)
     print("summary:", summary)
     print(stats.format_report(conn))
     print(f"commits:    git -C {work} log --oneline farm/bench-{args.tag}")
@@ -193,6 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--models", default="models.yaml")
     r.add_argument("--env", default=".env")
     r.add_argument("--branch", default="farm/run")
+    r.add_argument("--workers", type=int, default=None, help="tasks at the same time (default: settings.workers or 1)")
     r.set_defaults(func=cmd_run)
 
     sb = sub.add_parser("sandbox-build", help="build the Docker image for settings.sandbox: docker")
@@ -211,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--models", default="models.yaml")
     b.add_argument("--env", default=".env")
     b.add_argument("--tag", default="main", help="name of this run (separate repo and db)")
+    b.add_argument("--workers", type=int, default=None, help="tasks at the same time (default: settings.workers or 1)")
     b.set_defaults(func=cmd_bench)
     return p
 
